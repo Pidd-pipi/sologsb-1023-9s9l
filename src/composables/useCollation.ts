@@ -1,5 +1,6 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { sampleVersions, splitIntoUnits } from '../data';
+import { computeCharDiff, normalized } from '../diff';
 import type {
   AlignmentRow,
   ComparisonRules,
@@ -11,29 +12,6 @@ import type {
 
 const STORAGE_KEY = 'sologsb-1023/multi-version-collation/v1';
 
-const variantMap: Record<string, string> = {
-  為: '为',
-  爲: '为',
-  識: '识',
-  強: '强',
-  與: '与',
-  猶: '犹',
-  鄰: '邻',
-  儼: '俨',
-  渙: '涣',
-  將: '将',
-  樸: '朴',
-  曠: '旷',
-  濁: '浊',
-  靜: '静',
-  動: '动',
-  玅: '妙',
-  裏: '里',
-  裡: '里',
-  說: '说',
-  國: '国'
-};
-
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -42,17 +20,6 @@ function yieldToBrowser() {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, 0);
   });
-}
-
-function normalized(value: string, rules: ComparisonRules) {
-  let result = value.toLocaleLowerCase().trim();
-  if (rules.ignoreVariants) {
-    result = Array.from(result, (character) => variantMap[character] ?? character).join('');
-  }
-  if (rules.ignorePunctuation) {
-    result = result.replace(/[\s，。！？；：、“”‘’「」『』（）()《》〈〉·,.!?;:'"[\]{}<>—\-…]/g, '');
-  }
-  return result;
 }
 
 function similarity(left: string, right: string) {
@@ -376,6 +343,18 @@ export function useCollation() {
     void runAlignment();
   }
 
+  function rowCharDiff(row: AlignmentRow) {
+    return computeCharDiff(row.left?.text ?? '', row.right?.text ?? '', rules.value);
+  }
+
+  function diffSummaryText(row: AlignmentRow) {
+    const diff = rowCharDiff(row);
+    const parts: string[] = [];
+    if (diff.leftOnly.length) parts.push(`底本独有「${diff.leftOnly.join('」「')}」`);
+    if (diff.rightOnly.length) parts.push(`参校本独有「${diff.rightOnly.join('」「')}」`);
+    return parts.join('；') || '无字词差异';
+  }
+
   function exportMarkdown() {
     const changed = rows.value.filter((row) => row.status !== 'same' || row.note || row.source);
     const lines = [
@@ -386,13 +365,13 @@ export function useCollation() {
       `- 比较规则：${rules.value.ignorePunctuation ? '忽略标点；' : ''}${rules.value.ignoreVariants ? '忽略异体字；' : ''}保留正文。`,
       `- 导出时间：${new Date().toLocaleString('zh-CN')}`,
       '',
-      '| 序 | 类别 | 底本 | 参校本 | 校记 | 来源 | 状态 |',
-      '|---|---|---|---|---|---|---|'
+      '| 序 | 类别 | 底本 | 参校本 | 字词差异 | 校记 | 来源 | 状态 |',
+      '|---|---|---|---|---|---|---|---|'
     ];
     changed.forEach((row, index) => {
       const cell = (value?: string) => (value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
       lines.push(
-        `| ${index + 1} | ${statusLabel(row.status)} | ${cell(row.left?.text)} | ${cell(row.right?.text)} | ${cell(row.note)} | ${cell(row.source)} | ${row.accepted ? '已接受' : '待处理'} |`
+        `| ${index + 1} | ${statusLabel(row.status)} | ${cell(row.left?.text)} | ${cell(row.right?.text)} | ${cell(diffSummaryText(row))} | ${cell(row.note)} | ${cell(row.source)} | ${row.accepted ? '已接受' : '待处理'} |`
       );
     });
     lines.push('', `共 ${changed.length} 条校勘记录。`);
@@ -405,7 +384,19 @@ export function useCollation() {
         left: leftVersion.value,
         right: rightVersion.value,
         rules: rules.value,
-        rows: rows.value,
+        rows: rows.value.map((row) => {
+          const diff = rowCharDiff(row);
+          return {
+            ...row,
+            charDiff: {
+              leftSegments: diff.left,
+              rightSegments: diff.right,
+              leftOnly: diff.leftOnly,
+              rightOnly: diff.rightOnly,
+              summary: diffSummaryText(row)
+            }
+          };
+        }),
         exportedAt: new Date().toISOString()
       },
       null,

@@ -142,6 +142,49 @@ textarea {
   text-decoration-thickness: 1px;
 }
 
+.diff-text.diff-inline {
+  color: #4e5969;
+  background: #f7f8fa;
+}
+
+.diff-seg {
+  border-radius: 3px;
+}
+
+.diff-seg.seg-removed,
+.diff-seg.seg-added {
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.diff-seg.seg-removed {
+  color: #a8071a;
+  background: #ffd4cc;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.diff-seg.seg-added {
+  color: #0f7b45;
+  background: #c6f6d9;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.diff-seg.seg-removed:hover,
+.diff-seg.seg-added:hover {
+  outline: 1px solid currentColor;
+}
+
+.diff-summary {
+  margin-top: 10px;
+  color: #4e5969;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
 .paragraph-label {
   margin-bottom: 4px;
   color: #86909c;

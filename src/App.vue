@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { statusLabel, useCollation } from './composables/useCollation';
+import { computeCharDiff, type CharDiffResult } from './diff';
 import type { AlignmentRow, DifferenceStatus } from './types';
 
 const {
@@ -92,6 +93,28 @@ function statusColor(status: DifferenceStatus) {
 
 function rowClass(record: AlignmentRow) {
   return record.id === selectedRowId.value ? 'row-active' : '';
+}
+
+// 字符级差异缓存：键含左右句段 id 与比较规则，规则切换后自动重算
+const charDiffCache = new Map<string, CharDiffResult>();
+
+function charDiffFor(row: AlignmentRow): CharDiffResult {
+  const key = [
+    row.left?.id ?? '-',
+    row.right?.id ?? '-',
+    rules.value.ignorePunctuation ? 'p' : '',
+    rules.value.ignoreVariants ? 'v' : ''
+  ].join('|');
+  let cached = charDiffCache.get(key);
+  if (cached === undefined) {
+    cached = computeCharDiff(row.left?.text ?? '', row.right?.text ?? '', rules.value);
+    charDiffCache.set(key, cached);
+  }
+  return cached;
+}
+
+function selectRowFromDiff(row: AlignmentRow) {
+  selectedRowId.value = row.id;
 }
 
 function onSelectionChange(keys: (string | number)[]) {
@@ -246,7 +269,8 @@ window.addEventListener('beforeunload', beforeUnload);
             <a-checkbox v-model="rules.ignoreVariants" @change="recalculate">忽略常见异体字</a-checkbox>
           </a-space>
           <div style="margin-top: 10px; color: #86909c; font-size: 12px; line-height: 1.6">
-            规则只影响相同/改动判断，原始正文始终保留；重算会进入撤销历史。
+            规则只影响相同/改动判断，原始正文始终保留；重算会进入撤销历史。正文中
+            <span class="diff-seg seg-removed">红底</span>为底本独有、<span class="diff-seg seg-added">绿底</span>为参校本独有，点击高亮可选中对应校勘行。
           </div>
         </section>
 
@@ -337,8 +361,15 @@ window.addEventListener('beforeunload', beforeUnload);
             <template #left="{ record }">
               <div v-if="record.left">
                 <div class="paragraph-label">段 {{ record.left.paragraphOrder }} · 句 {{ record.left.sentenceOrder }}</div>
-                <div class="diff-text" :class="record.status === 'removed' ? 'removed' : record.status === 'changed' || record.status === 'misaligned' ? 'changed' : 'same'">
-                  {{ record.left.text }}
+                <div class="diff-text diff-inline">
+                  <span
+                    v-for="(segment, index) in charDiffFor(record).left"
+                    :key="index"
+                    class="diff-seg"
+                    :class="`seg-${segment.type}`"
+                    @click="selectRowFromDiff(record)"
+                    >{{ segment.text }}</span
+                  >
                 </div>
               </div>
               <div v-else style="padding: 20px 8px; color: #86909c; text-align: center">无对应底本句</div>
@@ -359,8 +390,15 @@ window.addEventListener('beforeunload', beforeUnload);
             <template #right="{ record }">
               <div v-if="record.right">
                 <div class="paragraph-label">段 {{ record.right.paragraphOrder }} · 句 {{ record.right.sentenceOrder }}</div>
-                <div class="diff-text" :class="record.status === 'added' ? 'added' : record.status === 'changed' || record.status === 'misaligned' ? 'changed' : 'same'">
-                  {{ record.right.text }}
+                <div class="diff-text diff-inline">
+                  <span
+                    v-for="(segment, index) in charDiffFor(record).right"
+                    :key="index"
+                    class="diff-seg"
+                    :class="`seg-${segment.type}`"
+                    @click="selectRowFromDiff(record)"
+                    >{{ segment.text }}</span
+                  >
                 </div>
               </div>
               <div v-else style="padding: 20px 8px; color: #86909c; text-align: center">无对应参校本句</div>
@@ -403,10 +441,43 @@ window.addEventListener('beforeunload', beforeUnload);
           </section>
 
           <section class="panel-section">
-            <div style="margin-bottom: 10px; color: #86909c; font-size: 12px">底本 / 参校本</div>
-            <div class="diff-text same">{{ selectedRow.left?.text || '（无）' }}</div>
+            <div style="margin-bottom: 10px; color: #86909c; font-size: 12px">底本 / 参校本（字符级差异）</div>
+            <div class="diff-text diff-inline">
+              <template v-if="selectedRow.left">
+                <span
+                  v-for="(segment, index) in charDiffFor(selectedRow).left"
+                  :key="index"
+                  class="diff-seg"
+                  :class="`seg-${segment.type}`"
+                  >{{ segment.text }}</span
+                >
+              </template>
+              <template v-else>（无）</template>
+            </div>
             <div style="height: 8px" />
-            <div class="diff-text changed">{{ selectedRow.right?.text || '（无）' }}</div>
+            <div class="diff-text diff-inline">
+              <template v-if="selectedRow.right">
+                <span
+                  v-for="(segment, index) in charDiffFor(selectedRow).right"
+                  :key="index"
+                  class="diff-seg"
+                  :class="`seg-${segment.type}`"
+                  >{{ segment.text }}</span
+                >
+              </template>
+              <template v-else>（无）</template>
+            </div>
+            <div class="diff-summary">
+              <template v-if="charDiffFor(selectedRow).leftOnly.length || charDiffFor(selectedRow).rightOnly.length">
+                <div v-if="charDiffFor(selectedRow).leftOnly.length">
+                  底本独有：<a-tag v-for="item in charDiffFor(selectedRow).leftOnly" :key="item" size="small" color="red">{{ item }}</a-tag>
+                </div>
+                <div v-if="charDiffFor(selectedRow).rightOnly.length" style="margin-top: 4px">
+                  参校本独有：<a-tag v-for="item in charDiffFor(selectedRow).rightOnly" :key="item" size="small" color="green">{{ item }}</a-tag>
+                </div>
+              </template>
+              <template v-else>两侧在当前比较规则下无字词差异</template>
+            </div>
           </section>
 
           <section class="panel-section">
