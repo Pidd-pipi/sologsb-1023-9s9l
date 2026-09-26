@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import { statusLabel, useCollation } from './composables/useCollation';
+import CharacterDiffText from './components/CharacterDiffText.vue';
 import type { AlignmentRow, DifferenceStatus } from './types';
 
 const {
@@ -292,6 +293,11 @@ window.addEventListener('beforeunload', beforeUnload);
           <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
             <a-input-search v-model="rowQuery" placeholder="搜索正文、校记或来源" allow-clear style="max-width: 360px" />
             <a-checkbox v-model="onlyDifferences">只看差异</a-checkbox>
+            <span class="diff-legend">
+              <mark class="diff-character left-only">底本独有</mark>
+              <mark class="diff-character right-only">参校本独有</mark>
+              <span class="diff-legend-hint">点击高亮字符可选中该校勘行</span>
+            </span>
             <a-tag color="arcoblue">{{ filteredRows.length }} / {{ rows.length }} 行</a-tag>
             <a-tag v-if="selectedRowIds.length" color="green">{{ selectedRowIds.length }} 行已勾选</a-tag>
             <a-button
@@ -337,8 +343,15 @@ window.addEventListener('beforeunload', beforeUnload);
             <template #left="{ record }">
               <div v-if="record.left">
                 <div class="paragraph-label">段 {{ record.left.paragraphOrder }} · 句 {{ record.left.sentenceOrder }}</div>
-                <div class="diff-text" :class="record.status === 'removed' ? 'removed' : record.status === 'changed' || record.status === 'misaligned' ? 'changed' : 'same'">
-                  {{ record.left.text }}
+                <div class="diff-text character-diff-box">
+                  <CharacterDiffText
+                    :text="record.left.text"
+                    :opposite-text="record.right?.text ?? ''"
+                    side="left"
+                    :rules="rules"
+                    selectable
+                    @select="selectedRowId = record.id"
+                  />
                 </div>
               </div>
               <div v-else style="padding: 20px 8px; color: #86909c; text-align: center">无对应底本句</div>
@@ -359,8 +372,15 @@ window.addEventListener('beforeunload', beforeUnload);
             <template #right="{ record }">
               <div v-if="record.right">
                 <div class="paragraph-label">段 {{ record.right.paragraphOrder }} · 句 {{ record.right.sentenceOrder }}</div>
-                <div class="diff-text" :class="record.status === 'added' ? 'added' : record.status === 'changed' || record.status === 'misaligned' ? 'changed' : 'same'">
-                  {{ record.right.text }}
+                <div class="diff-text character-diff-box">
+                  <CharacterDiffText
+                    :text="record.right.text"
+                    :opposite-text="record.left?.text ?? ''"
+                    side="right"
+                    :rules="rules"
+                    selectable
+                    @select="selectedRowId = record.id"
+                  />
                 </div>
               </div>
               <div v-else style="padding: 20px 8px; color: #86909c; text-align: center">无对应参校本句</div>
@@ -404,9 +424,27 @@ window.addEventListener('beforeunload', beforeUnload);
 
           <section class="panel-section">
             <div style="margin-bottom: 10px; color: #86909c; font-size: 12px">底本 / 参校本</div>
-            <div class="diff-text same">{{ selectedRow.left?.text || '（无）' }}</div>
+            <div class="diff-text character-diff-box" :class="`status-${selectedRow.status}`">
+              <CharacterDiffText
+                v-if="selectedRow.left"
+                :text="selectedRow.left.text"
+                :opposite-text="selectedRow.right?.text ?? ''"
+                side="left"
+                :rules="rules"
+              />
+              <template v-else>（无）</template>
+            </div>
             <div style="height: 8px" />
-            <div class="diff-text changed">{{ selectedRow.right?.text || '（无）' }}</div>
+            <div class="diff-text character-diff-box" :class="`status-${selectedRow.status}`">
+              <CharacterDiffText
+                v-if="selectedRow.right"
+                :text="selectedRow.right.text"
+                :opposite-text="selectedRow.left?.text ?? ''"
+                side="right"
+                :rules="rules"
+              />
+              <template v-else>（无）</template>
+            </div>
           </section>
 
           <section class="panel-section">

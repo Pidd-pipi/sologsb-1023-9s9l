@@ -2,37 +2,16 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { sampleVersions, splitIntoUnits } from '../data';
 import type {
   AlignmentRow,
+  CharacterDiffResult,
   ComparisonRules,
   DifferenceStatus,
   PersistedCollationState,
   TextUnit,
   VersionDocument
 } from '../types';
+import { diffCharacterTexts, normalizeForComparison, similarity } from '../textDiff';
 
 const STORAGE_KEY = 'sologsb-1023/multi-version-collation/v1';
-
-const variantMap: Record<string, string> = {
-  為: '为',
-  爲: '为',
-  識: '识',
-  強: '强',
-  與: '与',
-  猶: '犹',
-  鄰: '邻',
-  儼: '俨',
-  渙: '涣',
-  將: '将',
-  樸: '朴',
-  曠: '旷',
-  濁: '浊',
-  靜: '静',
-  動: '动',
-  玅: '妙',
-  裏: '里',
-  裡: '里',
-  說: '说',
-  國: '国'
-};
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -42,34 +21,6 @@ function yieldToBrowser() {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, 0);
   });
-}
-
-function normalized(value: string, rules: ComparisonRules) {
-  let result = value.toLocaleLowerCase().trim();
-  if (rules.ignoreVariants) {
-    result = Array.from(result, (character) => variantMap[character] ?? character).join('');
-  }
-  if (rules.ignorePunctuation) {
-    result = result.replace(/[\s，。！？；：、“”‘’「」『』（）()《》〈〉·,.!?;:'"[\]{}<>—\-…]/g, '');
-  }
-  return result;
-}
-
-function similarity(left: string, right: string) {
-  const a = Array.from(left);
-  const b = Array.from(right);
-  if (!a.length && !b.length) return 1;
-  if (!a.length || !b.length) return 0;
-  const previous = new Array(b.length + 1).fill(0);
-  for (let i = 1; i <= a.length; i += 1) {
-    let diagonal = 0;
-    for (let j = 1; j <= b.length; j += 1) {
-      const old = previous[j];
-      previous[j] = a[i - 1] === b[j - 1] ? diagonal + 1 : Math.max(previous[j], previous[j - 1]);
-      diagonal = old;
-    }
-  }
-  return previous[b.length] / Math.max(a.length, b.length);
 }
 
 function statusFor(left: TextUnit | undefined, right: TextUnit | undefined, ratio: number): DifferenceStatus {
@@ -103,14 +54,14 @@ async function alignUnits(
     } else {
       const sameParagraph =
         left.paragraphOrder === right.paragraphOrder || Math.abs(left.paragraphOrder - right.paragraphOrder) <= 1;
-      const ratio = similarity(normalized(left.text, rules), normalized(right.text, rules));
+      const ratio = similarity(normalizeForComparison(left.text, rules), normalizeForComparison(right.text, rules));
       const nextLeftRatio =
         leftUnits[leftIndex + 1] && right
-          ? similarity(normalized(leftUnits[leftIndex + 1].text, rules), normalized(right.text, rules))
+          ? similarity(normalizeForComparison(leftUnits[leftIndex + 1].text, rules), normalizeForComparison(right.text, rules))
           : 0;
       const nextRightRatio =
         rightUnits[rightIndex + 1] && left
-          ? similarity(normalized(left.text, rules), normalized(rightUnits[rightIndex + 1].text, rules))
+          ? similarity(normalizeForComparison(left.text, rules), normalizeForComparison(rightUnits[rightIndex + 1].text, rules))
           : 0;
 
       if (sameParagraph && (ratio >= 0.28 || (nextLeftRatio < 0.58 && nextRightRatio < 0.58))) {
@@ -152,7 +103,7 @@ function makeRow(
   rules: ComparisonRules,
   source: string
 ): AlignmentRow {
-  const score = left && right ? Number(similarity(normalized(left.text, rules), normalized(right.text, rules)).toFixed(3)) : 0;
+  const score = left && right ? Number(similarity(normalizeForComparison(left.text, rules), normalizeForComparison(right.text, rules)).toFixed(3)) : 0;
   return {
     id: `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     left,
@@ -273,7 +224,7 @@ export function useCollation() {
       rows.value = rows.value.map((row) => {
         if (!row.left || !row.right) return row;
         const score = Number(
-          similarity(normalized(row.left.text, rules.value), normalized(row.right.text, rules.value)).toFixed(3)
+          similarity(normalizeForComparison(row.left.text, rules.value), normalizeForComparison(row.right.text, rules.value)).toFixed(3)
         );
         return { ...row, similarity: score, status: statusFor(row.left, row.right, score) };
       });
@@ -301,7 +252,7 @@ export function useCollation() {
       for (const row of [current, target]) {
         if (row.left && row.right) {
           row.similarity = Number(
-            similarity(normalized(row.left.text, rules.value), normalized(row.right.text, rules.value)).toFixed(3)
+            similarity(normalizeForComparison(row.left.text, rules.value), normalizeForComparison(row.right.text, rules.value)).toFixed(3)
           );
           row.status = statusFor(row.left, row.right, row.similarity);
         } else {
@@ -376,23 +327,56 @@ export function useCollation() {
     void runAlignment();
   }
 
+  function rowCharacterDiff(row: AlignmentRow): CharacterDiffResult | undefined {
+    if (!row.left && !row.right) return undefined;
+    return diffCharacterTexts(row.left?.text ?? '', row.right?.text ?? '', rules.value);
+  }
+
   function exportMarkdown() {
     const changed = rows.value.filter((row) => row.status !== 'same' || row.note || row.source);
+    const escapeCell = (value: string) =>
+      value.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replaceAll('\n', ' ');
+    const markdownCell = (value: string) =>
+      escapeCell(value).replace(/([*_~[\]()<>#])/g, '\\$1');
+    const markedCell = (diff: CharacterDiffResult | undefined, side: 'left' | 'right') => {
+      if (!diff) return '';
+      return (side === 'left' ? diff.leftSegments : diff.rightSegments)
+        .map((segment) => {
+          const text = markdownCell(segment.text);
+          if (segment.type === 'left-only') return `~~${text}~~`;
+          if (segment.type === 'right-only') return `**${text}**`;
+          return text;
+        })
+        .join('');
+    };
+    const differenceSummary = (diff: CharacterDiffResult | undefined) => {
+      if (!diff || !diff.differences.length) return '无（按当前规则）';
+      return diff.differences
+        .map((item) => {
+          const left = item.left ? `底本“${markdownCell(item.left.text)}”(${item.left.start + 1}-${item.left.end})` : '';
+          const right = item.right ? `参校本“${markdownCell(item.right.text)}”(${item.right.start + 1}-${item.right.end})` : '';
+          if (item.kind === 'substitution') return `${left} → ${right}`;
+          return left || right;
+        })
+        .join('<br>');
+    };
     const lines = [
       '# 校勘记',
       '',
       `- 底本：${leftVersion.value?.name ?? '未选择'}`,
       `- 参校本：${rightVersion.value?.name ?? '未选择'}`,
       `- 比较规则：${rules.value.ignorePunctuation ? '忽略标点；' : ''}${rules.value.ignoreVariants ? '忽略异体字；' : ''}保留正文。`,
+      `- 字符标注：~~删除线~~为底本独有，**加粗**为参校本独有；括号内为字符位置。`,
       `- 导出时间：${new Date().toLocaleString('zh-CN')}`,
       '',
-      '| 序 | 类别 | 底本 | 参校本 | 校记 | 来源 | 状态 |',
-      '|---|---|---|---|---|---|---|'
+      '| 序 | 类别 | 底本 | 参校本 | 字词差异 | 校记 | 来源 | 状态 |',
+      '|---|---|---|---|---|---|---|---|'
     ];
     changed.forEach((row, index) => {
+      const diff = rowCharacterDiff(row);
       const cell = (value?: string) => (value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
       lines.push(
-        `| ${index + 1} | ${statusLabel(row.status)} | ${cell(row.left?.text)} | ${cell(row.right?.text)} | ${cell(row.note)} | ${cell(row.source)} | ${row.accepted ? '已接受' : '待处理'} |`
+        `| ${index + 1} | ${statusLabel(row.status)} | ${markedCell(diff, 'left')} | ${markedCell(diff, 'right')} | ${differenceSummary(diff)} | ${cell(row.note)} | ${cell(row.source)} | ${row.accepted ? '已接受' : '待处理'} |`
       );
     });
     lines.push('', `共 ${changed.length} 条校勘记录。`);
@@ -405,7 +389,16 @@ export function useCollation() {
         left: leftVersion.value,
         right: rightVersion.value,
         rules: rules.value,
-        rows: rows.value,
+        diffLegend: {
+          equal: '两侧共有字符',
+          leftOnly: '底本独有字符',
+          rightOnly: '参校本独有字符',
+          range: 'start/end 为相对该句原文的 JavaScript 字符偏移，end 不包含该位置'
+        },
+        rows: rows.value.map((row) => ({
+          ...row,
+          characterDiff: rowCharacterDiff(row) ?? null
+        })),
         exportedAt: new Date().toISOString()
       },
       null,

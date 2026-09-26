@@ -1,4 +1,31 @@
 export type DifferenceStatus = 'same' | 'changed' | 'added' | 'removed' | 'misaligned';
+export type DiffSide = 'left' | 'right';
+export type DiffSegmentType = 'equal' | 'left-only' | 'right-only';
+export type CharacterDifferenceKind = 'substitution' | 'left-only' | 'right-only';
+
+export interface TextRange {
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface DiffSegment extends TextRange {
+  type: DiffSegmentType;
+}
+
+export interface CharacterDifference {
+  kind: CharacterDifferenceKind;
+  left?: TextRange;
+  right?: TextRange;
+}
+
+export interface CharacterDiffResult {
+  leftSegments: DiffSegment[];
+  rightSegments: DiffSegment[];
+  differences: CharacterDifference[];
+  leftOnlyCharacterCount: number;
+  rightOnlyCharacterCount: number;
+}
 
 export interface TextUnit {
   id: string;
